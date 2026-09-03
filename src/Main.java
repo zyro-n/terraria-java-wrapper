@@ -1,7 +1,12 @@
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.nio.file.*;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 public class Main {
 
@@ -215,38 +220,140 @@ public class Main {
                     jarDirectory.toFile()
             );
 
-            // Connect Terraria stdin/stdout/stderr
-            // directly to the container console.
-            processBuilder.inheritIO();
+            // ----------------------------------------
+            // Terraria I/O
+            // ----------------------------------------
+
+            // stdout/stderr go straight to the console.
+            // stdin stays a pipe so we can send it commands.
+
+            processBuilder.redirectOutput(
+                    ProcessBuilder.Redirect.INHERIT
+            );
+
+            processBuilder.redirectError(
+                    ProcessBuilder.Redirect.INHERIT
+            );
 
             Process process =
                     processBuilder.start();
 
-            // Stop Terraria when Java is stopped.
+            final boolean[] manualShutdown = { false };
+
+            OutputStream terrariaStdin =
+                    process.getOutputStream();
+
+            PrintWriter terrariaWriter =
+                    new PrintWriter(terrariaStdin, true);
+
+            // ----------------------------------------
+            // Forward console input to Terraria
+            // ----------------------------------------
+
+            Thread stdinForwarder = new Thread(() -> {
+
+                try {
+
+                    BufferedReader reader =
+                            new BufferedReader(
+                                    new InputStreamReader(System.in)
+                            );
+
+                    String line;
+
+                    while ((line = reader.readLine()) != null) {
+
+                        if (line.trim().equalsIgnoreCase("exit")) {
+                            manualShutdown[0] = true;
+                        }
+
+                        terrariaWriter.println(line);
+
+                        if (!process.isAlive()) {
+                            break;
+                        }
+                    }
+
+                } catch (IOException e) {
+                    // stdin closed, nothing left to forward.
+                }
+            });
+
+            stdinForwarder.setDaemon(true);
+            stdinForwarder.start();
+
+            // ----------------------------------------
+            // Shutdown hook
+            // ----------------------------------------
+
+            // Stop Terraria gracefully when Java is stopped,
+            // instead of killing the process right away.
+
             Runtime.getRuntime().addShutdownHook(
                     new Thread(() -> {
 
-                        if (process.isAlive()) {
+                        if (!process.isAlive()) {
+                            return;
+                        }
 
-                            System.out.println(
-                                    "Stopping Terraria..."
-                            );
+                        System.out.println(
+                                "Stopping Terraria gracefully..."
+                        );
 
+                        manualShutdown[0] = true;
+
+                        terrariaWriter.println("exit");
+
+                        try {
+
+                            boolean stopped =
+                                    process.waitFor(
+                                            15,
+                                            TimeUnit.SECONDS
+                                    );
+
+                            if (!stopped) {
+
+                                System.out.println(
+                                        "Terraria did not stop in time, forcing shutdown..."
+                                );
+
+                                process.destroy();
+                            }
+
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
                             process.destroy();
                         }
                     })
             );
 
-            int exitCode =
+            int rawExitCode =
                     process.waitFor();
 
+            int finalExitCode = rawExitCode;
+
+            // A manual exit always reports code 0, so an
+            // external restart policy doesn't treat it as
+            // a crash.
+
+            if (manualShutdown[0]) {
+                finalExitCode = 0;
+            }
+
             System.out.println();
+
             System.out.println(
-                    "Terraria exited with code: "
-                            + exitCode
+                    "Terraria exited with code: " + rawExitCode
             );
 
-            System.exit(exitCode);
+            if (manualShutdown[0]) {
+                System.out.println(
+                        "Manual shutdown, reporting exit code 0."
+                );
+            }
+
+            System.exit(finalExitCode);
 
         } catch (InterruptedException e) {
 
@@ -258,20 +365,39 @@ public class Main {
 
             System.exit(1);
 
+        } catch (AccessDeniedException e) {
+
+            System.err.println(
+                    "ERROR: Permission denied for file: "
+                            + e.getFile()
+            );
+
+            System.err.println(
+                    "Check read/write permissions for that path."
+            );
+
+            System.exit(1);
+
+        } catch (NoSuchFileException e) {
+
+            System.err.println(
+                    "ERROR: File not found: " + e.getFile()
+            );
+
+            System.exit(1);
+
         } catch (IOException e) {
 
             System.err.println(
-                    "ERROR: I/O error."
+                    "ERROR: I/O error: " + e.getMessage()
             );
-
-            e.printStackTrace();
 
             System.exit(1);
 
         } catch (Exception e) {
 
             System.err.println(
-                    "ERROR: Unexpected error."
+                    "ERROR: Unexpected error: " + e.getMessage()
             );
 
             e.printStackTrace();

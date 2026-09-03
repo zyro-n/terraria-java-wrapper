@@ -16,18 +16,10 @@ public class Main {
             System.out.println("=================================");
             System.out.println(" Terraria Java Wrapper");
             System.out.println("=================================");
-            System.out.println("Working directory: " + jarDirectory);
-            System.out.println("Terraria binary:   " + terraria);
+            System.out.println("Directory: " + jarDirectory);
 
             if (!Files.exists(terraria)) {
-                System.err.println();
                 System.err.println("ERROR: TerrariaServer.bin.x86_64 not found!");
-                System.err.println("Place it next to server.jar.");
-                System.exit(1);
-            }
-
-            if (!Files.isRegularFile(terraria)) {
-                System.err.println("ERROR: Terraria binary is not a regular file.");
                 System.exit(1);
             }
 
@@ -36,30 +28,48 @@ public class Main {
             List<String> command = new ArrayList<>();
             command.add(terraria.toAbsolutePath().toString());
 
-            // Forward all arguments:
-            // java -jar server.jar -config serverconfig.txt
-            // becomes:
-            // TerrariaServer.bin.x86_64 -config serverconfig.txt
             Collections.addAll(command, args);
 
+            // إذا تم تمرير -config نتأكد أن الملف موجود
+            for (int i = 0; i < args.length - 1; i++) {
+                if (args[i].equals("-config")) {
+                    Path config = jarDirectory.resolve(args[i + 1]);
+
+                    System.out.println("Config file: " + config);
+
+                    if (!Files.exists(config)) {
+                        System.err.println(
+                                "ERROR: Config file not found: "
+                                        + config
+                        );
+                        System.exit(1);
+                    }
+
+                    System.out.println("Config file found.");
+                }
+            }
+
             System.out.println();
-            System.out.println("Starting Terraria Server...");
-            System.out.println("Arguments: " + String.join(" ", args));
+            System.out.println("Starting Terraria...");
+            System.out.println("Command:");
+
+            for (String arg : command) {
+                System.out.println("  " + arg);
+            }
+
             System.out.println();
 
-            ProcessBuilder processBuilder = new ProcessBuilder(command);
+            ProcessBuilder pb = new ProcessBuilder(command);
 
-            // Terraria runs from the same directory as server.jar
-            processBuilder.directory(jarDirectory.toFile());
+            // مهم جدًا:
+            // Terraria سيعمل من نفس مجلد server.jar
+            pb.directory(jarDirectory.toFile());
 
-            // stdin -> Terraria
-            // stdout -> Console
-            // stderr -> Console
-            processBuilder.inheritIO();
+            // نقل Console input/output
+            pb.inheritIO();
 
-            Process process = processBuilder.start();
+            Process process = pb.start();
 
-            // Try to stop Terraria when Java is terminated
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 if (process.isAlive()) {
                     process.destroy();
@@ -68,24 +78,14 @@ public class Main {
 
             int exitCode = process.waitFor();
 
-            System.out.println();
-            System.out.println("Terraria Server exited.");
-            System.out.println("Exit code: " + exitCode);
+            System.out.println(
+                    "Terraria exited with code: " + exitCode
+            );
 
             System.exit(exitCode);
 
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            System.err.println("ERROR: Process interrupted.");
-            System.exit(1);
-
-        } catch (IOException e) {
-            System.err.println("ERROR: Could not start Terraria Server.");
-            e.printStackTrace();
-            System.exit(1);
-
         } catch (Exception e) {
-            System.err.println("ERROR:");
+            System.err.println("Failed to start Terraria:");
             e.printStackTrace();
             System.exit(1);
         }
@@ -107,7 +107,8 @@ public class Main {
         return location.toAbsolutePath().normalize();
     }
 
-    private static void makeExecutable(Path file) throws IOException, InterruptedException {
+    private static void makeExecutable(Path file)
+            throws IOException, InterruptedException {
 
         try {
             Set<PosixFilePermission> permissions =
@@ -119,12 +120,7 @@ public class Main {
 
             Files.setPosixFilePermissions(file, permissions);
 
-            System.out.println("Executable permission set.");
-
         } catch (UnsupportedOperationException e) {
-
-            // Fallback to chmod
-            System.out.println("Using chmod +x...");
 
             Process chmod = new ProcessBuilder(
                     "chmod",
@@ -137,9 +133,7 @@ public class Main {
             int exitCode = chmod.waitFor();
 
             if (exitCode != 0) {
-                throw new IOException(
-                        "chmod +x failed with exit code " + exitCode
-                );
+                throw new IOException("chmod failed");
             }
         }
     }
